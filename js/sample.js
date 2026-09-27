@@ -17,7 +17,7 @@ const PLANS = [
     openings: [
       ['h', 0, 0.35, 1.45, 'entrance'],
       ['v', 1.82, 0.8, 1.9, 'door'],
-      ['h', 2.73, 2.2, 3.1, 'door'],
+      ['h', 2.73, 1.97, 2.65, 'door'],
       ['v', 3.64, 0.9, 1.7, 'door'],
       ['v', 5.46, 0.9, 1.7, 'door'],
       ['v', 5.46, 4.4, 6.0, 'door'],
@@ -30,7 +30,9 @@ const PLANS = [
       ['玄関', 0.91, 1.5], ['ホール・階段', 2.73, 1.4], ['洗面', 4.55, 1.4], ['浴室', 6.37, 1.4],
       ['WC', 8.19, 1.4], ['LDK 18帖', 2.73, 5.0], ['和室 6帖', 7.28, 5.0],
     ],
-    stairs: [1.9, 0.1, 3.55, 2.6],
+    // 階段 [x0, z0, x1, z1]（m）。上の階へ上れる階段として3Dにする
+    stairs: [2.75, 0.1, 3.54, 2.3],
+    walkableStairs: true,
   },
   {
     name: '2階',
@@ -53,7 +55,8 @@ const PLANS = [
       ['納戸', 0.91, 1.4], ['階段', 2.73, 1.4], ['主寝室 8帖', 6.37, 1.4], ['廊下', 6.8, 3.25],
       ['洋室 6帖', 2.27, 5.4], ['洋室 6帖', 6.82, 5.4],
     ],
-    stairs: [1.9, 0.1, 3.55, 2.6],
+    // 2階は吹き抜けとして描くだけ（1階の階段がここへ上がってくる）
+    stairs: [2.75, 0.1, 3.54, 2.3],
   },
 ];
 
@@ -153,7 +156,7 @@ function drawPlan(spec) {
   return c;
 }
 
-/** サンプル間取り図: [{name, canvas, widthM, entrances: [[x0, y0, x1, y1] (px)]}] */
+/** サンプル間取り図: [{name, canvas, widthM, entrances, stairs}]（entrances・stairs は [x0, y0, x1, y1] (px) の配列） */
 export function samplePlans() {
   const t = WALL / 2;
   return PLANS.map((spec) => ({
@@ -162,6 +165,7 @@ export function samplePlans() {
     widthM: W + WALL,
     entrances: spec.openings.filter((o) => o[4] === 'entrance').map(([o, at, a, b]) =>
       o === 'h' ? [toPx(a), toPx(at - t), toPx(b), toPx(at + t)] : [toPx(at - t), toPx(a), toPx(at + t), toPx(b)]),
+    stairs: spec.walkableStairs ? [spec.stairs.map(toPx)] : [],
   }));
 }
 

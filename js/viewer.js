@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { grassTexture } from './textures.js';
+import { stairProgress } from './houseBuilder.js';
 
 const EYE = 1.5;
 
@@ -225,7 +226,7 @@ export class Viewer {
       };
       for (let x = b.min.x; x <= b.max.x; x += 0.4) {
         for (let z = b.min.z; z <= b.max.z; z += 0.4) {
-          if (!col.isInside(x, z) || this.blocked(x, z)) continue;
+          if (!col.isInside(x, z) || this.blocked(x, z) || this.stairAt(x, z, this.floor) || this.stairAt(x, z, this.floor - 1)) continue;
           let minD = Infinity, sum = 0, vx = 0, vz = 0;
           for (let i = 0; i < 8; i++) {
             const a = (i / 8) * Math.PI * 2;
@@ -242,15 +243,69 @@ export class Viewer {
       }
     }
     this.camera.position.set(best.x, level + EYE, best.z);
+    this.groundY = level;
     this.walk.yaw = best.yaw;
     this.walk.pitch = -0.05;
   }
 
-  blocked(x, z) {
-    const col = this.house?.colliders[this.floor];
+  blocked(x, z, floor = this.floor) {
+    const col = this.house?.colliders[floor];
     if (!col) return false;
     const r = 0.2;
     return col.isBlocked(x - r, z - r) || col.isBlocked(x + r, z - r) || col.isBlocked(x - r, z + r) || col.isBlocked(x + r, z + r);
+  }
+
+  /** 指定した階から上る階段のうち、(x, z) を含むもの */
+  stairAt(x, z, floor) {
+    return this.house?.stairs.find((st) => st.floor === floor && stairProgress(st, x, z) !== null) || null;
+  }
+
+  /**
+   * (nx, nz) へ1歩進めるか判定し、進めるなら立っている高さと階を更新する。
+   * 階段にいる間は「階段の下の階」を現在の階として扱う。
+   */
+  tryStep(nx, nz) {
+    const f = this.floor;
+    const p = this.camera.position;
+    const levels = this.house.levels;
+    const cur = this.stairAt(p.x, p.z, f);
+    const next = this.stairAt(nx, nz, f);
+
+    if (next) {
+      const t = stairProgress(next, nx, nz);
+      if (!cur && t > 0.35) return false; // 段の途中へ横から入らない
+      // 上端付近は上の階の壁で当たり判定する
+      if (this.blocked(nx, nz, t > 0.8 && levels[f + 1] !== undefined ? f + 1 : f)) return false;
+      this.groundY = next.level + next.rise * t;
+      return true;
+    }
+    if (cur) {
+      // 階段から降りる：上端から出たら上の階へ
+      const t0 = stairProgress(cur, p.x, p.z);
+      const nf = t0 > 0.8 && levels[f + 1] !== undefined ? f + 1 : f;
+      if (this.blocked(nx, nz, nf)) return false;
+      this.changeFloor(nf);
+      this.groundY = levels[nf];
+      return true;
+    }
+    // 上の階から吹き抜け（下の階の階段）へ入る：上り口からだけ入れる
+    const down = this.stairAt(nx, nz, f - 1);
+    if (down) {
+      const t = stairProgress(down, nx, nz);
+      if (t < 0.85) return false; // 手すり
+      this.changeFloor(f - 1);
+      this.groundY = down.level + down.rise * t;
+      return true;
+    }
+    if (this.blocked(nx, nz, f)) return false;
+    this.groundY = levels[f];
+    return true;
+  }
+
+  changeFloor(f) {
+    if (f === this.floor) return;
+    this.floor = f;
+    this.onFloorChange?.(f);
   }
 
   updateWalk(dt) {
@@ -268,9 +323,12 @@ export class Viewer {
     const dx = (fx * f + -fz * s) * speed;
     const dz = (fz * f + fx * s) * speed;
     const p = this.camera.position;
-    if (!this.blocked(p.x + dx, p.z)) p.x += dx;
-    if (!this.blocked(p.x, p.z + dz)) p.z += dz;
-    p.y = this.house.levels[this.floor] + EYE;
+    if (dx && this.tryStep(p.x + dx, p.z)) p.x += dx;
+    if (dz && this.tryStep(p.x, p.z + dz)) p.z += dz;
+    if (this.groundY === undefined) this.groundY = this.house.levels[this.floor];
+    // 段差でガクッとしないよう、目線の高さをなめらかに追従させる
+    const targetY = this.groundY + EYE;
+    p.y += (targetY - p.y) * Math.min(1, dt * 12);
     this.camera.rotation.set(w.pitch, w.yaw, 0, 'YXZ');
   }
 
