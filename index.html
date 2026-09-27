@@ -88,7 +88,69 @@
       </section>
 
       <section class="panel">
-        <h2><span class="step">4</span>書き出し</h2>
+        <h2><span class="step">4</span>家具</h2>
+        <p class="hint">「内観（上から）」や「外観」で家具をドラッグすると動かせます。選んだ家具は <kbd>R</kbd> で回転、<kbd>Delete</kbd> で削除。</p>
+        <div class="btn-row">
+          <button id="autoFurnishBtn">おまかせ配置</button>
+          <button id="clearFurnitureBtn" class="secondary inline-btn">すべて片付ける</button>
+        </div>
+        <div class="sub-panel">
+          <label class="stack">追加する家具<select id="catalog"></select></label>
+          <div class="grid3">
+            <label>幅 (cm)<input type="number" id="addW" min="10" step="5"></label>
+            <label>奥行き (cm)<input type="number" id="addD" min="10" step="5"></label>
+            <label id="addHWrap">高さ (cm)<input type="number" id="addH" min="10" step="5"></label>
+          </div>
+          <button id="addFurnitureBtn" class="secondary">この家具を追加</button>
+          <p class="hint">手持ちの家具の寸法を入れて追加すると、部屋に入るか確かめられます。</p>
+        </div>
+        <div class="sub-panel selected-panel" id="selectedPanel" hidden>
+          <strong id="selName"></strong>
+          <div class="grid3">
+            <label>幅 (cm)<input type="number" id="selW" min="10" step="5"></label>
+            <label>奥行き (cm)<input type="number" id="selD" min="10" step="5"></label>
+            <label>&nbsp;<button id="rotateBtn" class="secondary inline-btn">90°回転</button></label>
+          </div>
+          <p class="warn" id="selWarn" hidden>⚠ 壁・ドア・ほかの家具と重なっています</p>
+          <div class="btn-row">
+            <button id="deleteBtn" class="secondary inline-btn">削除</button>
+            <button id="deselectBtn" class="secondary inline-btn">選択を解除</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2><span class="step">5</span>日当たり</h2>
+        <p class="hint">方角と季節・時刻を選ぶと、太陽の位置と影が変わります（東京付近）。</p>
+        <div class="grid2">
+          <label>間取り図の上の方角
+            <select id="upBearing">
+              <option value="0">北</option>
+              <option value="90">東</option>
+              <option value="180">南</option>
+              <option value="270">西</option>
+            </select>
+          </label>
+          <label>季節
+            <select id="season">
+              <option value="23.4">夏至（6月）</option>
+              <option value="0" selected>春分・秋分（3月・9月）</option>
+              <option value="-23.4">冬至（12月）</option>
+            </select>
+          </label>
+        </div>
+        <label class="slider-row">時刻 <input type="range" id="sunHour" min="5" max="19" step="0.25" value="13"><span id="sunHourVal">13:00</span></label>
+        <button id="sunPlayBtn" class="secondary">▶ 1日の日当たりを再生</button>
+      </section>
+
+      <section class="panel">
+        <h2><span class="step">6</span>保存・書き出し</h2>
+        <button id="saveBtn" class="secondary">プロジェクトを保存 (.json)</button>
+        <label class="file-btn secondary-file">
+          保存したプロジェクトを開く
+          <input type="file" id="openInput" accept=".json,application/json" hidden>
+        </label>
+        <p class="hint">間取り・編集内容・家具の配置・色などをまとめて保存し、あとで続きから作業できます。</p>
         <button id="exportBtn" class="secondary">3Dモデルを保存 (.glb)</button>
         <button id="shotBtn" class="secondary">画像を保存 (.png)</button>
       </section>
@@ -110,7 +172,6 @@
           <label class="inline">階
             <select id="viewFloor"></select>
           </label>
-          <button id="furnishBtn" class="toggle-btn">家具を配置</button>
           <label class="inline cut">断面
             <input type="range" id="cutHeight" min="0" max="100" value="100">
           </label>

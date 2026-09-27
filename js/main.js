@@ -3,7 +3,7 @@ import { analyzePlan, detectOpenings, gridBounds, EMPTY, WALL, WINDOW, DOOR, ENT
 import { buildHouse } from './houseBuilder.js';
 import { Viewer } from './viewer.js';
 import { Minimap } from './minimap.js';
-import { furnishHouse } from './furniture.js';
+import { detectRooms, autoFurnish, buildFurniture, isPlacementOk, findFreeSpot, footprint, CATALOG } from './furniture.js';
 import { PhotoPanel } from './photo.js';
 import { samplePlans, sampleExterior } from './sample.js';
 import { sidingTexture, roofTexture, floorTexture, photoTexture } from './textures.js';
@@ -23,7 +23,9 @@ viewer.bindPad($('walkPad'));
 viewer.minimap = new Minimap($('minimap'), (x, z) => {
   if (!viewer.teleport(x, z)) toast('そこへは移動できません（壁・家具・別の階など）');
 });
-let furnished = false;
+// 家具のリスト [{floor, model, label, w, d, h?, cx, cz, rot}]（位置はワールド座標 m）
+let furniture = [];
+let selected = null;
 
 const clip = { clippingPlanes: [viewer.clipPlane], clipShadows: true, side: THREE.DoubleSide };
 const siding = sidingTexture();
@@ -87,7 +89,8 @@ function rebuild() {
     offsetX: f.offsetX,
     offsetZ: f.offsetZ,
   })), s, mats);
-  if (furnished) furnishHouse(house, clip);
+  detectRooms(house);
+  buildFurniture(house, furniture, clip);
   viewer.setHouse(house);
   refreshFloorSelects();
 }
@@ -188,6 +191,9 @@ $('planInput').addEventListener('change', async (e) => {
 
 async function loadSample() {
   floors.length = 0;
+  furniture = [];
+  selected = null;
+  updateSelectedPanel();
   const plans = samplePlans();
   await addFloorImages(plans.map((p) => ({ name: p.name, image: p.canvas, thumb: p.canvas.toDataURL(), widthM: p.widthM, entrances: p.entrances, stairs: p.stairs, rooms: p.rooms })));
   setPhoto(sampleExterior());
@@ -226,6 +232,12 @@ function renderFloorList() {
       });
     }
     item.querySelector('.del').addEventListener('click', () => {
+      const readyIndex = floors.filter((f) => f.plan).indexOf(floors[i]);
+      if (readyIndex >= 0) {
+        furniture = furniture.filter((it) => it.floor !== readyIndex).map((it) => (it.floor > readyIndex ? { ...it, floor: it.floor - 1 } : it));
+      }
+      selected = null;
+      updateSelectedPanel();
       floors.splice(i, 1);
       if (editIndex >= floors.length) editIndex = Math.max(0, floors.length - 1);
       renderFloorList();
@@ -316,15 +328,265 @@ viewer.onFloorChange = (f) => { $('viewFloor').value = String(f); };
 $('cutHeight').addEventListener('input', (e) => viewer.setCut(e.target.value / 100));
 
 // ---------- 家具 ----------
-$('furnishBtn').addEventListener('click', () => {
-  if (!floors.some((f) => f.plan)) return toast('先に間取り図を読み込んでください。');
-  furnished = !furnished;
-  $('furnishBtn').textContent = furnished ? '家具を片付ける' : '家具を配置';
-  $('furnishBtn').classList.toggle('active', furnished);
-  rebuild();
-  if (furnished) {
-    const n = viewer.house.obstacles.reduce((a, o) => a + o.length, 0);
-    toast(`部屋の広さや形に合わせて家具を ${n} 点配置しました。`);
+/** 家具だけ作り直す（家全体は作り直さない） */
+function refreshFurniture() {
+  if (!viewer.house) return;
+  buildFurniture(viewer.house, furniture, clip);
+  viewer.minimap.setHouse(viewer.house);
+  viewer.select(selected, selected === null || isPlacementOk(viewer.house, furniture, selected));
+  updateSelectedPanel();
+}
+
+function selectFurniture(index) {
+  selected = index;
+  viewer.select(index, index === null || isPlacementOk(viewer.house, furniture, index));
+  updateSelectedPanel();
+}
+
+function updateSelectedPanel() {
+  const item = selected === null ? null : furniture[selected];
+  $('selectedPanel').hidden = !item;
+  if (!item) return;
+  $('selName').textContent = `選択中：${item.label}（${floors.filter((f) => f.plan)[item.floor]?.name || ''}）`;
+  $('selW').value = Math.round(item.w * 100);
+  $('selD').value = Math.round(item.d * 100);
+  $('selWarn').hidden = isPlacementOk(viewer.house, furniture, selected);
+}
+
+$('autoFurnishBtn').addEventListener('click', () => {
+  if (!viewer.house) return toast('先に間取り図を読み込んでください。');
+  furniture = autoFurnish(viewer.house);
+  selected = null;
+  refreshFurniture();
+  toast(`部屋の広さや形に合わせて家具を ${furniture.length} 点配置しました。ドラッグで動かせます。`);
+});
+$('clearFurnitureBtn').addEventListener('click', () => {
+  furniture = [];
+  selected = null;
+  refreshFurniture();
+});
+
+// 追加する家具の一覧
+$('catalog').innerHTML = CATALOG.map((c, i) => `<option value="${i}">${escapeHtml(c.label)}</option>`).join('');
+function syncCatalog() {
+  const c = CATALOG[$('catalog').value];
+  $('addW').value = Math.round(c.w * 100);
+  $('addD').value = Math.round(c.d * 100);
+  $('addH').value = Math.round((c.h || 0.8) * 100);
+  $('addHWrap').style.visibility = c.model === 'custom' ? 'visible' : 'hidden';
+}
+$('catalog').addEventListener('change', syncCatalog);
+syncCatalog();
+
+$('addFurnitureBtn').addEventListener('click', () => {
+  const house = viewer.house;
+  if (!house) return toast('先に間取り図を読み込んでください。');
+  const c = CATALOG[$('catalog').value];
+  const cm = (id, def) => Math.max(0.1, (parseFloat($(id).value) || def * 100) / 100);
+  const item = {
+    floor: viewer.floor, model: c.model, label: c.label,
+    w: cm('addW', c.w), d: cm('addD', c.d), cx: 0, cz: 0, rot: 0,
+  };
+  if (c.model === 'custom') {
+    item.h = cm('addH', 0.8);
+    item.label = `手持ちの家具 ${Math.round(item.w * 100)}×${Math.round(item.d * 100)}cm`;
+  }
+  // 今見ている場所の近くから、置ける場所を探す
+  const p = viewer.mode === 'walk' ? viewer.camera.position : viewer.orbit.target;
+  if (!findFreeSpot(house, furniture, item, p.x, p.z)) {
+    return toast(`この階には ${Math.round(item.w * 100)}×${Math.round(item.d * 100)}cm の家具を置ける場所が見つかりませんでした。`);
+  }
+  furniture.push(item);
+  selected = furniture.length - 1;
+  if (viewer.mode === 'exterior') {
+    document.querySelector('#viewMode [data-mode=interior]').click();
+  }
+  refreshFurniture();
+  toast(`${item.label}を追加しました。ドラッグで好きな場所へ動かせます。`);
+});
+
+// 3Dビューでの選択・移動
+viewer.onSelectFurniture = (index) => selectFurniture(index);
+viewer.onDragFurniture = (index, x, z) => {
+  const test = furniture.map((f, i) => (i === index ? { ...f, cx: x, cz: z } : f));
+  return isPlacementOk(viewer.house, test, index);
+};
+viewer.onMoveFurniture = (index, x, z) => {
+  Object.assign(furniture[index], { cx: x, cz: z });
+  refreshFurniture();
+  if (!isPlacementOk(viewer.house, furniture, index)) toast('壁・ドア・ほかの家具と重なっています。');
+};
+
+function rotateSelected() {
+  const item = furniture[selected];
+  if (!item) return;
+  item.rot = (item.rot + Math.PI / 2) % (Math.PI * 2);
+  refreshFurniture();
+}
+function deleteSelected() {
+  if (selected === null) return;
+  furniture.splice(selected, 1);
+  selected = null;
+  refreshFurniture();
+}
+$('rotateBtn').addEventListener('click', rotateSelected);
+$('deleteBtn').addEventListener('click', deleteSelected);
+$('deselectBtn').addEventListener('click', () => selectFurniture(null));
+for (const [id, key] of [['selW', 'w'], ['selD', 'd']]) {
+  $(id).addEventListener('change', () => {
+    const item = furniture[selected];
+    const v = parseFloat($(id).value);
+    if (!item || !(v > 0)) return;
+    item[key] = v / 100;
+    refreshFurniture();
+  });
+}
+window.addEventListener('keydown', (e) => {
+  if (selected === null || viewer.mode === 'walk' || e.target.closest?.('input, select, textarea')) return;
+  if (e.key === 'r' || e.key === 'R') rotateSelected();
+  else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
+  else if (e.key === 'Escape') selectFurniture(null);
+});
+
+// ---------- 日当たり ----------
+function applySun() {
+  const hour = parseFloat($('sunHour').value);
+  const h = Math.floor(hour), m = Math.round((hour - h) * 60);
+  $('sunHourVal').textContent = `${h}:${String(m).padStart(2, '0')}`;
+  viewer.setSun({
+    upBearing: parseFloat($('upBearing').value),
+    declination: parseFloat($('season').value),
+    hour,
+  });
+}
+for (const id of ['upBearing', 'season']) $(id).addEventListener('change', applySun);
+$('sunHour').addEventListener('input', applySun);
+let sunTimer = 0;
+$('sunPlayBtn').addEventListener('click', () => {
+  if (sunTimer) {
+    clearInterval(sunTimer);
+    sunTimer = 0;
+    $('sunPlayBtn').textContent = '▶ 1日の日当たりを再生';
+    return;
+  }
+  $('sunPlayBtn').textContent = '■ 停止';
+  let hour = 5;
+  sunTimer = setInterval(() => {
+    hour += 0.1;
+    if (hour > 19) hour = 5;
+    $('sunHour').value = hour;
+    applySun();
+  }, 60);
+});
+applySun();
+
+// ---------- プロジェクトの保存・読み込み ----------
+function imageToDataURL(img, type = 'image/png', max = 1600) {
+  const w = img.naturalWidth || img.width, h = img.naturalHeight || img.height;
+  const sc = Math.min(1, max / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.round(w * sc);
+  c.height = Math.round(h * sc);
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, c.width, c.height);
+  g.drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL(type, 0.85);
+}
+function bytesToBase64(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function loadImageURL(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error('画像を読み込めませんでした'));
+    img.src = url;
+  });
+}
+
+const SETTING_IDS = ['wallHeight', 'sillHeight', 'headHeight', 'baseHeight', 'roofType', 'roofPitch', 'eaves', 'ridgeDir',
+  'wallColor', 'roofColor', 'floorColor', 'upBearing', 'season', 'sunHour'];
+
+$('saveBtn').addEventListener('click', () => {
+  if (!floors.length) return toast('保存する間取りがありません。');
+  const project = {
+    app: 'HomeSimulation1',
+    version: 1,
+    settings: Object.fromEntries(SETTING_IDS.map((id) => [id, $(id).value])),
+    photo: photo.img ? imageToDataURL(photo.img, 'image/jpeg', 800) : null,
+    floors: floors.map((f) => {
+      // 画像は解析したときと同じ大きさで保存し、読み込み時に同じグリッドを再現できるようにする
+      const image = f.plan ? f.plan.canvas : f.image;
+      return {
+        name: f.name, image: imageToDataURL(image, 'image/png', 99999),
+        threshold: f.threshold, thickness: f.thickness,
+        widthM: f.widthM, bboxCells: f.bboxCells, offsetX: f.offsetX, offsetZ: f.offsetZ,
+        plan: f.plan ? { cols: f.plan.cols, rows: f.plan.rows, grid: bytesToBase64(f.plan.grid), roomHints: f.plan.roomHints } : null,
+      };
+    }),
+    furniture,
+  };
+  const url = URL.createObjectURL(new Blob([JSON.stringify(project)], { type: 'application/json' }));
+  download(url, 'my-house.json');
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  toast('プロジェクトを保存しました。「保存したプロジェクトを開く」で続きから作業できます。');
+});
+
+$('openInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  try {
+    const project = JSON.parse(await file.text());
+    if (project.app !== 'HomeSimulation1') throw new Error('このアプリで保存したファイルではありません');
+    for (const [id, v] of Object.entries(project.settings || {})) if ($(id)) $(id).value = v;
+    floors.length = 0;
+    for (const sf of project.floors) {
+      const img = await loadImageURL(sf.image);
+      const f = {
+        id: nextId++, name: sf.name, image: img, thumb: sf.image,
+        threshold: sf.threshold, thickness: sf.thickness, widthM: sf.widthM,
+        offsetX: sf.offsetX, offsetZ: sf.offsetZ, presetWidth: sf.widthM,
+      };
+      if (sf.plan) {
+        const plan = analyzePlan(img, { threshold: f.threshold, thickness: f.thickness });
+        if (plan.cols === sf.plan.cols && plan.rows === sf.plan.rows) {
+          plan.grid.set(base64ToBytes(sf.plan.grid));
+          plan.roomHints = sf.plan.roomHints || [];
+          f.plan = plan;
+          f.bboxCells = sf.bboxCells;
+        } else {
+          analyzeFloor(f, { keepWidth: true });
+        }
+      }
+      floors.push(f);
+    }
+    furniture = project.furniture || [];
+    selected = null;
+    if (project.photo) {
+      $('photoWrap').hidden = false;
+      photo.setImage(await loadImageURL(project.photo));
+    }
+    $('useTexture').checked = false;
+    updateMaterials();
+    editIndex = 0;
+    renderFloorList();
+    rebuild();
+    applySun();
+    viewer.setMode(viewer.mode);
+    updateSelectedPanel();
+    toast('プロジェクトを開きました。');
+  } catch (err) {
+    toast(`開けませんでした：${err.message}`);
   }
 });
 
@@ -469,4 +731,4 @@ function toast(msg) {
 }
 
 // デバッグ・テスト用
-window.__app = { floors, viewer, rebuild, loadSample, DOOR };
+window.__app = { floors, viewer, rebuild, loadSample, DOOR, get furniture() { return furniture; }, footprint };

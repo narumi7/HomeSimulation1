@@ -94,6 +94,21 @@ export class Minimap {
       const [x1, y1] = info.toCellF(o.x1, o.z1);
       g.fillRect(x0, y0, x1 - x0, y1 - y0);
     }
+    // 部屋名
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = `${10 * dpr}px sans-serif`;
+    for (const r of info.rooms || []) {
+      if (!r.label || r.area < 2.5) continue;
+      const [cx, cy] = info.toCellF(r.center[0], r.center[1]);
+      const px = (cx - ox) * s * dpr, py = (cy - oy) * s * dpr;
+      g.lineWidth = 3 * dpr;
+      g.strokeStyle = 'rgba(255,255,255,0.85)';
+      g.strokeText(r.label, px, py);
+      g.fillStyle = '#4a4540';
+      g.fillText(r.label, px, py);
+    }
     return { canvas: c, ox, oy, s, cssW, cssH, dpr };
   }
 
@@ -148,6 +163,46 @@ export class Minimap {
     g.lineWidth = 2 * img.dpr;
     g.fill();
     g.stroke();
+    g.restore();
+    this.drawCompass(g, img.dpr);
+  }
+
+  /** 北の向き（地図の上から時計回りの角度、ラジアン） */
+  setNorth(angle) {
+    this.north = angle;
+  }
+
+  drawCompass(g, dpr) {
+    const x = this.canvas.width - 24 * dpr, y = 24 * dpr, r = 9 * dpr;
+    const a = this.north || 0;
+    g.save();
+    g.translate(x, y);
+    g.fillStyle = 'rgba(255,255,255,0.85)';
+    g.beginPath();
+    g.arc(0, 0, r + 13 * dpr, 0, Math.PI * 2);
+    g.fill();
+    g.rotate(a);
+    g.fillStyle = '#d23c2a';
+    g.beginPath();
+    g.moveTo(0, -r);
+    g.lineTo(r * 0.45, 0);
+    g.lineTo(-r * 0.45, 0);
+    g.closePath();
+    g.fill();
+    g.fillStyle = '#555';
+    g.beginPath();
+    g.moveTo(0, r);
+    g.lineTo(r * 0.45, 0);
+    g.lineTo(-r * 0.45, 0);
+    g.closePath();
+    g.fill();
+    g.rotate(-a);
+    g.fillStyle = '#d23c2a';
+    g.font = `bold ${9 * dpr}px sans-serif`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    // 針の先に「N」
+    g.fillText('N', Math.sin(a) * (r + 8 * dpr), -Math.cos(a) * (r + 8 * dpr));
     g.restore();
   }
 

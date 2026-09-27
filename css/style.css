@@ -247,9 +247,21 @@ input[type=number], select {
   pointer-events: none;
 }
 
-/* 家具ボタン（オン・オフ） */
-.toggle-btn { background: var(--panel); color: var(--accent); padding: 5px 12px; font-size: 13px; }
-.toggle-btn.active { background: var(--accent); color: var(--accent-ink); }
+/* 家具・日当たり・保存のパネル */
+.btn-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+button.inline-btn { width: auto; margin: 0; }
+.sub-panel { border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 4px; }
+.selected-panel { background: #eef8f1; border: 1px solid #bfe3cb; border-radius: 8px; padding: 8px; margin-top: 8px; }
+.selected-panel strong { display: block; margin-bottom: 6px; }
+.stack { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-bottom: 6px; }
+.grid3 label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); min-width: 0; }
+.grid3 input { width: 100%; }
+.warn { color: #c0392b; font-size: 12px; margin: 4px 0; }
+.slider-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 8px; font-size: 13px; }
+.slider-row input { flex: 1; }
+.file-btn.secondary-file { background: var(--panel); color: var(--accent); display: block; text-align: center; margin-bottom: 6px; }
+kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: 11px; background: #fff; }
 
 /* 間取りエディタ */
 .editor-wrap { flex: 1; overflow: auto; padding: 12px; background: #eee; min-height: 300px; }
