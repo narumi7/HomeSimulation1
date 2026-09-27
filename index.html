@@ -120,7 +120,7 @@
             <button id="sampleBtn2">サンプルで試す</button>
           </div>
           <div class="walk-help" id="walkHelp" hidden>
-            ドラッグで見回す / WASD・矢印キーで移動（Shiftで速く）
+            ドラッグで見回す / WASD・矢印キーで移動（Shiftで速く）/ 階段を歩くと上の階へ
           </div>
           <div class="walk-pad" id="walkPad" hidden>
             <button data-dir="fwd">▲</button>
@@ -139,6 +139,7 @@
             <button data-tool="2" class="tool-window">窓</button>
             <button data-tool="3" class="tool-door">ドア（開口）</button>
             <button data-tool="4" class="tool-entrance">玄関ドア</button>
+            <button data-tool="5" class="tool-stairs">階段</button>
             <button data-tool="0">消しゴム</button>
           </div>
           <label class="inline">太さ <input type="range" id="brushSize" min="1" max="8" value="2"></label>
@@ -154,7 +155,8 @@
         </div>
         <p class="hint legend">
           <span class="sw wall"></span>壁 <span class="sw window"></span>窓 <span class="sw door"></span>ドア
-          <span class="sw entrance"></span>玄関ドア ／ ドラッグで塗る。編集は3Dビューに戻ると反映されます。
+          <span class="sw entrance"></span>玄関ドア <span class="sw stairs"></span>階段（下の階に塗ると上の階へ上れます）
+          ／ ドラッグで塗る。編集は3Dビューに戻ると反映されます。
         </p>
       </div>
     </main>

@@ -239,10 +239,12 @@ input[type=number], select {
 .sw.window { background: rgba(40, 120, 230, .85); }
 .sw.door { background: rgba(40, 170, 80, .85); }
 .sw.entrance { background: rgba(240, 150, 20, .9); }
+.sw.stairs { background: rgba(150, 70, 200, .75); }
 .tool-wall.active { background: #c83228 !important; border-color: #c83228 !important; }
 .tool-window.active { background: #2878e6 !important; border-color: #2878e6 !important; }
 .tool-door.active { background: #28aa50 !important; border-color: #28aa50 !important; }
 .tool-entrance.active { background: #e89010 !important; border-color: #e89010 !important; }
+.tool-stairs.active { background: #9646c8 !important; border-color: #9646c8 !important; }
 
 /* お知らせ表示 */
 .toast {

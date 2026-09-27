@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { analyzePlan, detectOpenings, gridBounds, EMPTY, WALL, WINDOW, DOOR, ENTRANCE } from './planAnalyzer.js';
+import { analyzePlan, detectOpenings, gridBounds, EMPTY, WALL, WINDOW, DOOR, ENTRANCE, STAIRS } from './planAnalyzer.js';
 import { buildHouse } from './houseBuilder.js';
 import { Viewer } from './viewer.js';
 import { PhotoPanel } from './photo.js';
@@ -116,19 +116,20 @@ function analyzeFloor(f, { keepWidth = false } = {}) {
   }
   detectOpenings(plan, f.widthM / f.bboxCells);
 
-  if (f.entrances) {
-    const sc = plan.width / (f.image.naturalWidth || f.image.width);
-    for (const [x0, y0, x1, y1] of f.entrances) {
+  // サンプルでは玄関と階段の位置があらかじめ分かっているので、その場所を塗っておく
+  const sc = plan.width / (f.image.naturalWidth || f.image.width);
+  const markCells = (rects, type, canOverwrite) => {
+    for (const [x0, y0, x1, y1] of rects || []) {
       for (let y = Math.floor(y0 * sc / plan.cellPx); y <= Math.floor(y1 * sc / plan.cellPx); y++) {
         for (let x = Math.floor(x0 * sc / plan.cellPx); x <= Math.floor(x1 * sc / plan.cellPx); x++) {
           const i = y * plan.cols + x;
-          if (x >= 0 && y >= 0 && x < plan.cols && y < plan.rows && (plan.grid[i] === WINDOW || plan.grid[i] === EMPTY)) {
-            plan.grid[i] = ENTRANCE;
-          }
+          if (x >= 0 && y >= 0 && x < plan.cols && y < plan.rows && canOverwrite.includes(plan.grid[i])) plan.grid[i] = type;
         }
       }
     }
-  }
+  };
+  markCells(f.entrances, ENTRANCE, [WINDOW, EMPTY]);
+  markCells(f.stairs, STAIRS, [EMPTY]);
   f.plan = plan;
 }
 
@@ -145,6 +146,7 @@ async function addFloorImages(items) {
       offsetZ: 0,
       presetWidth: it.widthM || 0,
       entrances: it.entrances || null,
+      stairs: it.stairs || null,
     };
     analyzeFloor(f);
     floors.push(f);
@@ -173,7 +175,7 @@ $('planInput').addEventListener('change', async (e) => {
 async function loadSample() {
   floors.length = 0;
   const plans = samplePlans();
-  await addFloorImages(plans.map((p) => ({ name: p.name, image: p.canvas, thumb: p.canvas.toDataURL(), widthM: p.widthM, entrances: p.entrances })));
+  await addFloorImages(plans.map((p) => ({ name: p.name, image: p.canvas, thumb: p.canvas.toDataURL(), widthM: p.widthM, entrances: p.entrances, stairs: p.stairs })));
   setPhoto(sampleExterior());
   toast('サンプルの家を表示しました。「ウォークスルー」で中を歩けます。');
 }
@@ -295,6 +297,8 @@ segmented($('viewMode'), 'mode', (m) => {
   $('walkPad').hidden = m !== 'walk';
 });
 $('viewFloor').addEventListener('change', (e) => viewer.setFloor(parseInt(e.target.value, 10)));
+// ウォークスルーで階段を上り下りしたら、階の表示も切り替える
+viewer.onFloorChange = (f) => { $('viewFloor').value = String(f); };
 $('cutHeight').addEventListener('input', (e) => viewer.setCut(e.target.value / 100));
 
 // ---------- タブ ----------
@@ -314,6 +318,7 @@ const COLORS = {
   [WINDOW]: 'rgba(40, 120, 230, 0.7)',
   [DOOR]: 'rgba(40, 170, 80, 0.7)',
   [ENTRANCE]: 'rgba(240, 150, 20, 0.85)',
+  [STAIRS]: 'rgba(150, 70, 200, 0.6)',
 };
 
 function currentFloor() { return floors[editIndex]; }

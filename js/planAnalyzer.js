@@ -5,6 +5,7 @@ export const WALL = 1;
 export const WINDOW = 2;
 export const DOOR = 3;
 export const ENTRANCE = 4;
+export const STAIRS = 5;
 
 const MAX_SIDE = 1200;
 

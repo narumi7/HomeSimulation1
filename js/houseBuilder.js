@@ -1,6 +1,6 @@
 // グリッド化した間取りから3Dの家を組み立てる
 import * as THREE from 'three';
-import { EMPTY, WALL, WINDOW, DOOR, ENTRANCE, computeOutside, gridBounds, mergeRects } from './planAnalyzer.js';
+import { EMPTY, WALL, WINDOW, DOOR, ENTRANCE, STAIRS, computeOutside, gridBounds, mergeRects } from './planAnalyzer.js';
 
 // マテリアル番号
 export const M = {
@@ -110,25 +110,72 @@ export function buildHouse(floors, s, mats) {
   const root = new THREE.Group();
   const levels = [];
   const colliders = [];
+  const stairs = [];
   const H = s.wallHeight;
-  let level = s.baseHeight;
+  const RISE = H + SLAB; // 1階分の高さ（床から上の階の床まで）
   let topBox = null;
   let topY = 0;
   const bounds = new THREE.Box3();
 
-  floors.forEach((fl, idx) => {
+  // 先に各階の座標変換と外部判定を用意しておく（階段の向きや吹き抜けの判定で上下の階を参照するため）
+  const infos = floors.map((fl, idx) => {
+    const level = s.baseHeight + idx * RISE;
     const { cols, rows, grid } = fl.plan;
     const m = fl.metersPerCell;
     const bb = gridBounds(grid, cols, rows);
-    if (!bb) { levels.push(level); colliders.push(null); return; }
-
+    if (!bb) return { level, empty: true };
     const cx = (bb.x0 + bb.x1 + 1) / 2;
     const cz = (bb.y0 + bb.y1 + 1) / 2;
-    const X = (x) => (x - cx) * m + fl.offsetX;
-    const Z = (y) => (y - cz) * m + fl.offsetZ;
     const outside = computeOutside(grid, cols, rows, Math.max(1, Math.round(0.5 / m)));
     const at = (x, y) => (x < 0 || y < 0 || x >= cols || y >= rows) ? EMPTY : grid[y * cols + x];
     const isOut = (x, y) => (x < 0 || y < 0 || x >= cols || y >= rows) ? true : !!outside[y * cols + x];
+    const toCell = (wx, wz) => [Math.floor((wx - fl.offsetX) / m + cx), Math.floor((wz - fl.offsetZ) / m + cz)];
+    return {
+      level, cols, rows, grid, m, bb, outside, at, isOut, toCell,
+      X: (x) => (x - cx) * m + fl.offsetX,
+      Z: (y) => (y - cz) * m + fl.offsetZ,
+      // 人が立てる場所か（建物の内側で、壁・窓などがない）
+      walkable(wx, wz) {
+        const [x, y] = toCell(wx, wz);
+        const t = at(x, y);
+        return !isOut(x, y) && (t === EMPTY || t === DOOR || t === STAIRS);
+      },
+    };
+  });
+
+  // 階段：上の階がある階だけ。上の階で床につながる側を「上り口の反対＝上端」にする
+  const stairsByFloor = infos.map(() => []);
+  infos.forEach((info, idx) => {
+    const upper = infos[idx + 1];
+    if (info.empty || !upper || upper.empty) return;
+    for (const r of mergeRects(info.cols, info.rows, (i) => info.grid[i] === STAIRS)) {
+      const x0 = info.X(r.x), x1 = info.X(r.x + r.w), z0 = info.Z(r.y), z1 = info.Z(r.y + r.h);
+      const axis = (x1 - x0) >= (z1 - z0) ? 'x' : 'z';
+      const probe = (sign) => {
+        // 端のすぐ外側の数点で、上の階・下の階が歩けるかを数える
+        let up = 0, low = 0;
+        for (let k = 0.2; k < 1; k += 0.2) {
+          const px = axis === 'x' ? (sign > 0 ? x1 + 0.15 : x0 - 0.15) : x0 + (x1 - x0) * k;
+          const pz = axis === 'z' ? (sign > 0 ? z1 + 0.15 : z0 - 0.15) : z0 + (z1 - z0) * k;
+          if (upper.walkable(px, pz)) up++;
+          if (info.walkable(px, pz)) low++;
+        }
+        return up * 2 - low;
+      };
+      const dir = probe(1) >= probe(-1) ? 1 : -1;
+      const st = { floor: idx, x0, x1, z0, z1, axis, dir, level: info.level, rise: RISE };
+      stairs.push(st);
+      stairsByFloor[idx].push(st);
+    }
+  });
+
+  floors.forEach((fl, idx) => {
+    const info = infos[idx];
+    const level = info.level;
+    if (info.empty) { levels.push(level); colliders.push(null); return; }
+    const { cols, rows, grid, outside, at, isOut, X, Z } = info;
+    const hasUpper = idx + 1 < infos.length && !infos[idx + 1].empty;
+    const below = idx > 0 ? stairsByFloor[idx - 1] : [];
 
     const group = new THREE.Group();
     group.name = `floor-${idx}`;
@@ -175,15 +222,22 @@ export function buildHouse(floors, s, mats) {
         if (type === ENTRANCE) addDoorLeaf(b, x0, x1, z0, z1, level, level + s.headHeight);
       }
     }
+    // 階段の段板
+    for (const st of stairsByFloor[idx]) addStairSteps(b, st);
 
     // 床・天井（建物の内側と壁の下）
-    const inside = (i) => !outside[i];
-    const slabRects = mergeRects(cols, rows, inside);
+    const cellCenter = (i) => [X((i % cols) + 0.5), Z(((i / cols) | 0) + 0.5)];
+    // 下の階の階段の真上は床を抜く（吹き抜け）
+    const overStairs = (i) => {
+      if (!below.length) return false;
+      const [wx, wz] = cellCenter(i);
+      return below.some((st) => wx > st.x0 && wx < st.x1 && wz > st.z0 && wz < st.z1);
+    };
     const outerFace = (r) => (name) => {
       const cells = sideCells(r, name);
       return cells.some(([x, y]) => isOut(x, y)) ? M.WALL_EXT : -1;
     };
-    for (const r of slabRects) {
+    for (const r of mergeRects(cols, rows, (i) => !outside[i] && !overStairs(i))) {
       const [x0, x1] = rx(r), [z0, z1] = rz(r);
       if (idx === 0) {
         // 基礎
@@ -192,9 +246,14 @@ export function buildHouse(floors, s, mats) {
         // 上の階の床（下の階の天井の上に少し浮かせて重ねる）
         b.box(x0, x1, level - 0.06, level + 0.01, z0, z1, (n) => n === 'py' ? M.FLOOR : n === 'ny' ? M.CEIL : outerFace(r)(n));
       }
-      // 天井スラブ：下面は天井、上面は（上に何もなければ）屋上
+    }
+    // 天井スラブ：下面は天井、上面は（上に何もなければ）屋上。階段の上は抜く
+    for (const r of mergeRects(cols, rows, (i) => !outside[i] && !(hasUpper && grid[i] === STAIRS))) {
+      const [x0, x1] = rx(r), [z0, z1] = rz(r);
       b.box(x0, x1, level + H, level + H + SLAB, z0, z1, (n) => n === 'ny' ? M.CEIL : n === 'py' ? M.ROOF : outerFace(r)(n));
     }
+    // 吹き抜けのまわりの手すり
+    for (const st of below) addVoidRail(b, st, level, info);
 
     const mesh = b.toMesh(mats.building);
     if (mesh) group.add(mesh);
@@ -206,26 +265,21 @@ export function buildHouse(floors, s, mats) {
     colliders.push({
       level,
       isBlocked(wx, wz) {
-        const x = Math.floor((wx - fl.offsetX) / m + cx);
-        const y = Math.floor((wz - fl.offsetZ) / m + cz);
-        const t = at(x, y);
+        const t = at(...info.toCell(wx, wz));
         return t === WALL || t === WINDOW || t === ENTRANCE;
       },
       isInside(wx, wz) {
-        const x = Math.floor((wx - fl.offsetX) / m + cx);
-        const y = Math.floor((wz - fl.offsetZ) / m + cz);
-        return !isOut(x, y);
+        return !isOut(...info.toCell(wx, wz));
       },
     });
 
     const fb = new THREE.Box3(
-      new THREE.Vector3(X(bb.x0), 0, Z(bb.y0)),
-      new THREE.Vector3(X(bb.x1 + 1), level + H + SLAB, Z(bb.y1 + 1)),
+      new THREE.Vector3(X(info.bb.x0), 0, Z(info.bb.y0)),
+      new THREE.Vector3(X(info.bb.x1 + 1), level + RISE, Z(info.bb.y1 + 1)),
     );
     bounds.union(fb);
     topBox = fb;
-    topY = level + H + SLAB;
-    level += H + SLAB;
+    topY = level + RISE;
   });
 
   if (topBox && s.roofType !== 'none') {
@@ -233,7 +287,63 @@ export function buildHouse(floors, s, mats) {
     if (roof) { roof.name = 'roof'; root.add(roof); bounds.union(new THREE.Box3().setFromObject(roof)); }
   }
 
-  return { group: root, levels, colliders, bounds, wallHeight: H };
+  return { group: root, levels, colliders, stairs, bounds, wallHeight: H };
+}
+
+/** 階段上の位置 (0=下端, 1=上端)。階段の外なら null */
+export function stairProgress(st, x, z) {
+  if (x < st.x0 || x > st.x1 || z < st.z0 || z > st.z1) return null;
+  const t = st.axis === 'x' ? (x - st.x0) / (st.x1 - st.x0) : (z - st.z0) / (st.z1 - st.z0);
+  return st.dir > 0 ? t : 1 - t;
+}
+
+/** 段板を並べる（1段の高さ約19cm） */
+function addStairSteps(b, st) {
+  const n = Math.max(4, Math.round(st.rise / 0.19));
+  const face = (name) => name === 'py' ? M.FLOOR : name === 'ny' ? -1 : M.WALL_INT;
+  for (let i = 0; i < n; i++) {
+    const t0 = i / n, t1 = (i + 1) / n;
+    const top = st.level + st.rise * t1;
+    // 段の下は空けて、ささら桁風に厚み 25cm の板にする
+    const bottom = Math.max(st.level, top - 0.25 - st.rise / n);
+    if (st.axis === 'x') {
+      const [a, c] = st.dir > 0 ? [st.x0 + (st.x1 - st.x0) * t0, st.x0 + (st.x1 - st.x0) * t1]
+        : [st.x1 - (st.x1 - st.x0) * t1, st.x1 - (st.x1 - st.x0) * t0];
+      b.box(a, c, bottom, top, st.z0, st.z1, face);
+    } else {
+      const [a, c] = st.dir > 0 ? [st.z0 + (st.z1 - st.z0) * t0, st.z0 + (st.z1 - st.z0) * t1]
+        : [st.z1 - (st.z1 - st.z0) * t1, st.z1 - (st.z1 - st.z0) * t0];
+      b.box(st.x0, st.x1, bottom, top, a, c, face);
+    }
+  }
+}
+
+/** 吹き抜けの縁（上り口を除く、床に面した辺）に手すりを付ける */
+function addVoidRail(b, st, level, upper) {
+  const edges = [
+    { axis: 'x', at: st.z0, from: st.x0, to: st.x1, out: -1, top: st.axis === 'z' && st.dir < 0 },
+    { axis: 'x', at: st.z1, from: st.x0, to: st.x1, out: 1, top: st.axis === 'z' && st.dir > 0 },
+    { axis: 'z', at: st.x0, from: st.z0, to: st.z1, out: -1, top: st.axis === 'x' && st.dir < 0 },
+    { axis: 'z', at: st.x1, from: st.z0, to: st.z1, out: 1, top: st.axis === 'x' && st.dir > 0 },
+  ];
+  const all = () => M.FRAME;
+  const h = 0.9, t = 0.04;
+  for (const e of edges) {
+    if (e.top) continue;
+    const mid = (e.from + e.to) / 2;
+    const px = e.axis === 'x' ? mid : e.at + e.out * 0.15;
+    const pz = e.axis === 'x' ? e.at + e.out * 0.15 : mid;
+    if (!upper.walkable(px, pz)) continue;
+    const box = (a0, a1, y0, y1) => e.axis === 'x'
+      ? b.box(a0, a1, y0, y1, e.at - t, e.at + t, all)
+      : b.box(e.at - t, e.at + t, y0, y1, a0, a1, all);
+    box(e.from, e.to, level + h - 0.05, level + h);
+    const count = Math.max(2, Math.round((e.to - e.from) / 0.5) + 1);
+    for (let i = 0; i < count; i++) {
+      const c = e.from + (e.to - e.from) * (i / (count - 1));
+      box(Math.max(e.from, c - t / 2), Math.min(e.to, c + t / 2), level, level + h);
+    }
+  }
 }
 
 function addGlass(b, glassB, x0, x1, z0, z1, y0, y1) {
