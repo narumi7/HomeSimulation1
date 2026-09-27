@@ -10,7 +10,7 @@ const MAX_SIDE = 1200;
 
 /**
  * 画像を解析して壁グリッドを作る。
- * @param {HTMLImageElement|HTMLCanvasElement} img
+ * @param {HTMLImageElement|HTMLCanvasElement} img  間取り図の画像
  * @param {{threshold?: number, thickness?: number}} opts thickness は処理画像上の px（0 で自動推定）
  */
 export function analyzePlan(img, { threshold = 130, thickness = 0 } = {}) {

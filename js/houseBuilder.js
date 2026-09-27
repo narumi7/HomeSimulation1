@@ -102,9 +102,9 @@ function planarUV(p, n) {
 }
 
 /**
- * @param {Array} floors  [{plan:{cols,rows,grid}, metersPerCell, offsetX, offsetZ}]
+ * @param {Array} floors  各階のデータ [{plan:{cols,rows,grid}, metersPerCell, offsetX, offsetZ}]
  * @param {object} s  設定（wallHeight, sillHeight, headHeight, baseHeight, roofType, roofPitch, eaves, ridgeDir）
- * @param {object} mats { building: Material[], glass: Material }
+ * @param {object} mats  マテリアル { building: 建物用の配列, glass: ガラス用 }
  */
 export function buildHouse(floors, s, mats) {
   const root = new THREE.Group();

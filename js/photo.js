@@ -4,8 +4,8 @@ const MAX_W = 640;
 
 export class PhotoPanel {
   /**
-   * @param {HTMLCanvasElement} canvas
-   * @param {{onColor:(kind:string, hex:string)=>void, onTexture:(canvas:HTMLCanvasElement)=>void}} cb
+   * @param {HTMLCanvasElement} canvas  写真を表示するキャンバス
+   * @param {{onColor:(kind:string, hex:string)=>void, onTexture:(canvas:HTMLCanvasElement)=>void}} cb  色を取ったとき・模様を切り取ったときの処理
    */
   constructor(canvas, cb) {
     this.canvas = canvas;
