@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>おうち3Dシミュレーター</title>
+  <meta name="description" content="建物の外観写真と間取り図から、家の外観と室内を3Dで再現するWebアプリ">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three/three.module.min.js",
+      "three/addons/": "./vendor/three/addons/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header class="app-header">
+    <h1>🏠 おうち3Dシミュレーター</h1>
+    <p class="tagline">外観写真と間取り図から、家の外側も内側も3Dで</p>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <section class="panel">
+        <h2><span class="step">1</span>外観写真</h2>
+        <label class="file-btn">
+          写真を選ぶ
+          <input type="file" id="photoInput" accept="image/*" hidden>
+        </label>
+        <div class="photo-wrap" id="photoWrap" hidden>
+          <canvas id="photoCanvas"></canvas>
+          <div class="photo-tools">
+            <span>写真をクリックして色を取る：</span>
+            <div class="seg" id="pickMode">
+              <button data-mode="wall" class="active">外壁</button>
+              <button data-mode="roof">屋根</button>
+              <button data-mode="texture">外壁の模様（範囲をドラッグ）</button>
+            </div>
+          </div>
+        </div>
+        <div class="colors">
+          <label>外壁 <input type="color" id="wallColor" value="#e8dcc8"></label>
+          <label>屋根 <input type="color" id="roofColor" value="#4a4f57"></label>
+          <label>床 <input type="color" id="floorColor" value="#b98a5a"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="useTexture" disabled> 写真から切り取った外壁の模様を使う</label>
+      </section>
+
+      <section class="panel">
+        <h2><span class="step">2</span>間取り図</h2>
+        <p class="hint">1階・2階など階ごとに追加できます。壁が濃い線で描かれた図がおすすめです。</p>
+        <label class="file-btn">
+          間取り図を追加
+          <input type="file" id="planInput" accept="image/*" multiple hidden>
+        </label>
+        <button class="link-btn" id="sampleBtn">サンプルで試す</button>
+        <div id="floorList" class="floor-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2><span class="step">3</span>建物の設定</h2>
+        <div class="grid2">
+          <label>天井高 (m)<input type="number" id="wallHeight" value="2.4" step="0.1" min="2" max="4"></label>
+          <label>窓の下端 (m)<input type="number" id="sillHeight" value="0.9" step="0.1" min="0" max="2"></label>
+          <label>窓・ドア上端 (m)<input type="number" id="headHeight" value="2.0" step="0.1" min="1.5" max="3"></label>
+          <label>基礎の高さ (m)<input type="number" id="baseHeight" value="0.45" step="0.05" min="0" max="1.5"></label>
+          <label>屋根の形
+            <select id="roofType">
+              <option value="gable">切妻</option>
+              <option value="hip">寄棟</option>
+              <option value="shed">片流れ</option>
+              <option value="flat">陸屋根（平ら）</option>
+              <option value="none">なし</option>
+            </select>
+          </label>
+          <label>屋根の勾配 (寸)<input type="number" id="roofPitch" value="4" step="0.5" min="1" max="10"></label>
+          <label>軒の出 (m)<input type="number" id="eaves" value="0.5" step="0.1" min="0" max="1.5"></label>
+          <label>棟の向き
+            <select id="ridgeDir">
+              <option value="auto">自動</option>
+              <option value="x">横向き</option>
+              <option value="z">縦向き</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2><span class="step">4</span>書き出し</h2>
+        <button id="exportBtn" class="secondary">3Dモデルを保存 (.glb)</button>
+        <button id="shotBtn" class="secondary">画像を保存 (.png)</button>
+      </section>
+    </aside>
+
+    <main class="stage">
+      <nav class="tabs">
+        <button data-tab="view" class="active">3Dビュー</button>
+        <button data-tab="edit">間取りを調整</button>
+      </nav>
+
+      <div class="tab-body" id="viewTab">
+        <div class="view-bar">
+          <div class="seg" id="viewMode">
+            <button data-mode="exterior" class="active">外観</button>
+            <button data-mode="interior">内観（上から）</button>
+            <button data-mode="walk">ウォークスルー</button>
+          </div>
+          <label class="inline">階
+            <select id="viewFloor"></select>
+          </label>
+          <label class="inline cut">断面
+            <input type="range" id="cutHeight" min="0" max="100" value="100">
+          </label>
+        </div>
+        <div class="viewer" id="viewer">
+          <div class="empty" id="emptyMsg">
+            <p>間取り図を追加すると、ここに家が3Dで表示されます。</p>
+            <button id="sampleBtn2">サンプルで試す</button>
+          </div>
+          <div class="walk-help" id="walkHelp" hidden>
+            ドラッグで見回す / WASD・矢印キーで移動（Shiftで速く）
+          </div>
+          <div class="walk-pad" id="walkPad" hidden>
+            <button data-dir="fwd">▲</button>
+            <button data-dir="left">◀</button>
+            <button data-dir="back">▼</button>
+            <button data-dir="right">▶</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="tab-body" id="editTab" hidden>
+        <div class="edit-bar">
+          <label class="inline">階 <select id="editFloor"></select></label>
+          <div class="seg" id="editTool">
+            <button data-tool="1" class="active tool-wall">壁</button>
+            <button data-tool="2" class="tool-window">窓</button>
+            <button data-tool="3" class="tool-door">ドア（開口）</button>
+            <button data-tool="4" class="tool-entrance">玄関ドア</button>
+            <button data-tool="0">消しゴム</button>
+          </div>
+          <label class="inline">太さ <input type="range" id="brushSize" min="1" max="8" value="2"></label>
+          <label class="inline check"><input type="checkbox" id="showPlan" checked> 図を表示</label>
+        </div>
+        <div class="edit-bar">
+          <label class="inline">線の濃さ <input type="range" id="threshold" min="40" max="230" value="130"></label>
+          <label class="inline">壁の厚み <input type="range" id="thickness" min="0" max="40" value="0"><span id="thicknessVal">自動</span></label>
+          <button id="reanalyzeBtn" class="secondary small">自動認識をやり直す</button>
+        </div>
+        <div class="editor-wrap">
+          <canvas id="editCanvas"></canvas>
+        </div>
+        <p class="hint legend">
+          <span class="sw wall"></span>壁 <span class="sw window"></span>窓 <span class="sw door"></span>ドア
+          <span class="sw entrance"></span>玄関ドア ／ ドラッグで塗る。編集は3Dビューに戻ると反映されます。
+        </p>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
