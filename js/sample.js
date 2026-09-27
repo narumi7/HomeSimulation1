@@ -156,7 +156,7 @@ function drawPlan(spec) {
   return c;
 }
 
-/** サンプル間取り図: [{name, canvas, widthM, entrances, stairs}]（entrances・stairs は [x0, y0, x1, y1] (px) の配列） */
+/** サンプル間取り図: [{name, canvas, widthM, entrances, stairs, rooms}]（entrances・stairs は [x0, y0, x1, y1] (px) の配列、rooms は [部屋名, x, y] (px)） */
 export function samplePlans() {
   const t = WALL / 2;
   return PLANS.map((spec) => ({
@@ -166,6 +166,8 @@ export function samplePlans() {
     entrances: spec.openings.filter((o) => o[4] === 'entrance').map(([o, at, a, b]) =>
       o === 'h' ? [toPx(a), toPx(at - t), toPx(b), toPx(at + t)] : [toPx(at - t), toPx(a), toPx(at + t), toPx(b)]),
     stairs: spec.walkableStairs ? [spec.stairs.map(toPx)] : [],
+    // 部屋名とその位置 (px)。家具を置くときに部屋の種類を決める手がかりにする
+    rooms: spec.labels.map(([text, x, z]) => [text, toPx(x), toPx(z)]),
   }));
 }
 

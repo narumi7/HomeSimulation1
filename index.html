@@ -110,6 +110,7 @@
           <label class="inline">階
             <select id="viewFloor"></select>
           </label>
+          <button id="furnishBtn" class="toggle-btn">家具を配置</button>
           <label class="inline cut">断面
             <input type="range" id="cutHeight" min="0" max="100" value="100">
           </label>
@@ -120,8 +121,9 @@
             <button id="sampleBtn2">サンプルで試す</button>
           </div>
           <div class="walk-help" id="walkHelp" hidden>
-            ドラッグで見回す / WASD・矢印キーで移動（Shiftで速く）/ 階段を歩くと上の階へ
+            ドラッグで見回す / WASD・矢印キーで移動（Shiftで速く）/ 階段を歩くと上の階へ / 地図をタップでその場所へ
           </div>
+          <div class="minimap" id="minimap" hidden></div>
           <div class="walk-pad" id="walkPad" hidden>
             <button data-dir="fwd">▲</button>
             <button data-dir="left">◀</button>

@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { analyzePlan, detectOpenings, gridBounds, EMPTY, WALL, WINDOW, DOOR, ENTRANCE, STAIRS } from './planAnalyzer.js';
 import { buildHouse } from './houseBuilder.js';
 import { Viewer } from './viewer.js';
+import { Minimap } from './minimap.js';
+import { furnishHouse } from './furniture.js';
 import { PhotoPanel } from './photo.js';
 import { samplePlans, sampleExterior } from './sample.js';
 import { sidingTexture, roofTexture, floorTexture, photoTexture } from './textures.js';
@@ -17,6 +19,11 @@ let dirty = false;
 // ---------- 3D ----------
 const viewer = new Viewer($('viewer'));
 viewer.bindPad($('walkPad'));
+// ミニマップ：タップした場所へ移動できる
+viewer.minimap = new Minimap($('minimap'), (x, z) => {
+  if (!viewer.teleport(x, z)) toast('そこへは移動できません（壁・家具・別の階など）');
+});
+let furnished = false;
 
 const clip = { clippingPlanes: [viewer.clipPlane], clipShadows: true, side: THREE.DoubleSide };
 const siding = sidingTexture();
@@ -75,10 +82,12 @@ function rebuild() {
   s.sillHeight = Math.min(s.sillHeight, s.headHeight - 0.1);
   const house = buildHouse(ready.map((f) => ({
     plan: f.plan,
+    name: f.name,
     metersPerCell: f.widthM / f.bboxCells,
     offsetX: f.offsetX,
     offsetZ: f.offsetZ,
   })), s, mats);
+  if (furnished) furnishHouse(house, clip);
   viewer.setHouse(house);
   refreshFloorSelects();
 }
@@ -130,6 +139,10 @@ function analyzeFloor(f, { keepWidth = false } = {}) {
   };
   markCells(f.entrances, ENTRANCE, [WINDOW, EMPTY]);
   markCells(f.stairs, STAIRS, [EMPTY]);
+  plan.roomHints = (f.rooms || []).map(([name, x, y]) => ({
+    name,
+    cell: [Math.floor(x * sc / plan.cellPx), Math.floor(y * sc / plan.cellPx)],
+  }));
   f.plan = plan;
 }
 
@@ -147,6 +160,7 @@ async function addFloorImages(items) {
       presetWidth: it.widthM || 0,
       entrances: it.entrances || null,
       stairs: it.stairs || null,
+      rooms: it.rooms || null,
     };
     analyzeFloor(f);
     floors.push(f);
@@ -175,7 +189,7 @@ $('planInput').addEventListener('change', async (e) => {
 async function loadSample() {
   floors.length = 0;
   const plans = samplePlans();
-  await addFloorImages(plans.map((p) => ({ name: p.name, image: p.canvas, thumb: p.canvas.toDataURL(), widthM: p.widthM, entrances: p.entrances, stairs: p.stairs })));
+  await addFloorImages(plans.map((p) => ({ name: p.name, image: p.canvas, thumb: p.canvas.toDataURL(), widthM: p.widthM, entrances: p.entrances, stairs: p.stairs, rooms: p.rooms })));
   setPhoto(sampleExterior());
   toast('サンプルの家を表示しました。「ウォークスルー」で中を歩けます。');
 }
@@ -300,6 +314,19 @@ $('viewFloor').addEventListener('change', (e) => viewer.setFloor(parseInt(e.targ
 // ウォークスルーで階段を上り下りしたら、階の表示も切り替える
 viewer.onFloorChange = (f) => { $('viewFloor').value = String(f); };
 $('cutHeight').addEventListener('input', (e) => viewer.setCut(e.target.value / 100));
+
+// ---------- 家具 ----------
+$('furnishBtn').addEventListener('click', () => {
+  if (!floors.some((f) => f.plan)) return toast('先に間取り図を読み込んでください。');
+  furnished = !furnished;
+  $('furnishBtn').textContent = furnished ? '家具を片付ける' : '家具を配置';
+  $('furnishBtn').classList.toggle('active', furnished);
+  rebuild();
+  if (furnished) {
+    const n = viewer.house.obstacles.reduce((a, o) => a + o.length, 0);
+    toast(`部屋の広さや形に合わせて家具を ${n} 点配置しました。`);
+  }
+});
 
 // ---------- タブ ----------
 segmented(document.querySelector('.tabs'), 'tab', (t) => {
