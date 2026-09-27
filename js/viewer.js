@@ -92,6 +92,7 @@ export class Viewer {
     }
     this.house = house;
     this.scene.add(house.group);
+    this.minimap?.setHouse(house);
 
     const b = house.bounds;
     const size = b.getSize(new THREE.Vector3());
@@ -113,6 +114,7 @@ export class Viewer {
     this.mode = mode;
     this.orbit.enabled = mode !== 'walk';
     this.camera.fov = mode === 'walk' ? 70 : 50;
+    this.minimap?.show(mode === 'walk');
     this.camera.updateProjectionMatrix();
     if (!this.house) return;
     const b = this.house.bounds;
@@ -252,7 +254,21 @@ export class Viewer {
     const col = this.house?.colliders[floor];
     if (!col) return false;
     const r = 0.2;
-    return col.isBlocked(x - r, z - r) || col.isBlocked(x + r, z - r) || col.isBlocked(x - r, z + r) || col.isBlocked(x + r, z + r);
+    if (col.isBlocked(x - r, z - r) || col.isBlocked(x + r, z - r) || col.isBlocked(x - r, z + r) || col.isBlocked(x + r, z + r)) return true;
+    // 家具にもぶつかる
+    const obs = this.house.obstacles?.[floor] || [];
+    return obs.some((o) => x > o.x0 - r && x < o.x1 + r && z > o.z0 - r && z < o.z1 + r);
+  }
+
+  /** ミニマップでタップした場所へ移動（今いる階の、歩ける場所だけ） */
+  teleport(x, z) {
+    if (this.mode !== 'walk' || !this.house) return false;
+    const col = this.house.colliders[this.floor];
+    if (!col || !col.isInside(x, z) || this.blocked(x, z) || this.stairAt(x, z, this.floor) || this.stairAt(x, z, this.floor - 1)) return false;
+    const level = this.house.levels[this.floor];
+    this.camera.position.set(x, level + EYE, z);
+    this.groundY = level;
+    return true;
   }
 
   /** 指定した階から上る階段のうち、(x, z) を含むもの */
@@ -334,7 +350,11 @@ export class Viewer {
 
   tick() {
     const dt = Math.min(this.clock.getDelta(), 0.1);
-    if (this.mode === 'walk' && this.house) this.updateWalk(dt);
+    if (this.mode === 'walk' && this.house) {
+      this.updateWalk(dt);
+      const p = this.camera.position;
+      this.minimap?.draw(this.floor, p.x, p.z, this.walk.yaw, this.camera.fov);
+    }
     else this.orbit.update();
     this.renderer.render(this.scene, this.camera);
   }

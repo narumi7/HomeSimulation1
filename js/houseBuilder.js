@@ -129,9 +129,11 @@ export function buildHouse(floors, s, mats) {
     const outside = computeOutside(grid, cols, rows, Math.max(1, Math.round(0.5 / m)));
     const at = (x, y) => (x < 0 || y < 0 || x >= cols || y >= rows) ? EMPTY : grid[y * cols + x];
     const isOut = (x, y) => (x < 0 || y < 0 || x >= cols || y >= rows) ? true : !!outside[y * cols + x];
-    const toCell = (wx, wz) => [Math.floor((wx - fl.offsetX) / m + cx), Math.floor((wz - fl.offsetZ) / m + cz)];
+    const toCellF = (wx, wz) => [(wx - fl.offsetX) / m + cx, (wz - fl.offsetZ) / m + cz];
+    const toCell = (wx, wz) => toCellF(wx, wz).map(Math.floor);
     return {
-      level, cols, rows, grid, m, bb, outside, at, isOut, toCell,
+      index: idx, name: fl.name || `${idx + 1}階`, roomHints: fl.plan.roomHints || [],
+      level, cols, rows, grid, m, bb, outside, at, isOut, toCell, toCellF,
       X: (x) => (x - cx) * m + fl.offsetX,
       Z: (y) => (y - cz) * m + fl.offsetZ,
       // 人が立てる場所か（建物の内側で、壁・窓などがない）
@@ -167,6 +169,17 @@ export function buildHouse(floors, s, mats) {
       stairs.push(st);
       stairsByFloor[idx].push(st);
     }
+  });
+
+  // 下の階の階段の真上にあたるセルか（上の階の吹き抜け）
+  infos.forEach((info, idx) => {
+    if (info.empty) return;
+    const below = idx > 0 ? stairsByFloor[idx - 1] : [];
+    info.overStairs = (i) => {
+      if (!below.length) return false;
+      const wx = info.X((i % info.cols) + 0.5), wz = info.Z(((i / info.cols) | 0) + 0.5);
+      return below.some((st) => wx > st.x0 && wx < st.x1 && wz > st.z0 && wz < st.z1);
+    };
   });
 
   floors.forEach((fl, idx) => {
@@ -225,14 +238,8 @@ export function buildHouse(floors, s, mats) {
     // 階段の段板
     for (const st of stairsByFloor[idx]) addStairSteps(b, st);
 
-    // 床・天井（建物の内側と壁の下）
-    const cellCenter = (i) => [X((i % cols) + 0.5), Z(((i / cols) | 0) + 0.5)];
-    // 下の階の階段の真上は床を抜く（吹き抜け）
-    const overStairs = (i) => {
-      if (!below.length) return false;
-      const [wx, wz] = cellCenter(i);
-      return below.some((st) => wx > st.x0 && wx < st.x1 && wz > st.z0 && wz < st.z1);
-    };
+    // 床・天井（建物の内側と壁の下）。下の階の階段の真上は床を抜く（吹き抜け）
+    const overStairs = info.overStairs;
     const outerFace = (r) => (name) => {
       const cells = sideCells(r, name);
       return cells.some(([x, y]) => isOut(x, y)) ? M.WALL_EXT : -1;
@@ -287,7 +294,7 @@ export function buildHouse(floors, s, mats) {
     if (roof) { roof.name = 'roof'; root.add(roof); bounds.union(new THREE.Box3().setFromObject(roof)); }
   }
 
-  return { group: root, levels, colliders, stairs, bounds, wallHeight: H };
+  return { group: root, levels, colliders, stairs, bounds, wallHeight: H, floors: infos, obstacles: infos.map(() => []) };
 }
 
 /** 階段上の位置 (0=下端, 1=上端)。階段の外なら null */
