@@ -359,42 +359,176 @@ function classifyRooms(info, rooms, roomId) {
  * 家具を配置する。各階のグループに家具を追加し、歩けない範囲（house.obstacles）を登録する。
  * @returns 配置した家具の数
  */
-let materials = null;
-export function furnishHouse(house, clip) {
-  // マテリアルは作り直しのたびに増えないよう使い回す
-  const M = materials || (materials = makeMaterials(clip));
-  let count = 0;
-  house.floors.forEach((info, fi) => {
-    if (info.empty) return;
-    const group = house.group.getObjectByName(`floor-${fi}`);
-    const furn = new THREE.Group();
-    furn.name = 'furniture';
-    group.add(furn);
+// 部屋の種類の表示名
+export const ROOM_NAMES = {
+  ldk: 'LDK', washitsu: '和室', master: '主寝室', bedroom: '洋室', genkan: '玄関',
+  senmen: '洗面', bath: '浴室', wc: 'トイレ', storage: '収納', hall: '',
+};
+
+// 追加できる家具の一覧（寸法は m。custom は高さも指定できる箱）
+export const CATALOG = [
+  { model: 'bed', label: 'シングルベッド', w: 1.0, d: 2.0 },
+  { model: 'bed', label: 'ダブルベッド', w: 1.4, d: 2.0 },
+  { model: 'sofa', label: 'ソファ', w: 1.8, d: 0.85 },
+  { model: 'coffeeTable', label: 'ローテーブル', w: 1.0, d: 0.5 },
+  { model: 'tvBoard', label: 'テレビ台', w: 1.6, d: 0.42 },
+  { model: 'dining', label: 'ダイニングセット', w: 1.4, d: 1.8 },
+  { model: 'kitchen', label: 'キッチン', w: 2.4, d: 0.65 },
+  { model: 'fridge', label: '冷蔵庫', w: 0.7, d: 0.7 },
+  { model: 'wardrobe', label: 'クローゼット', w: 1.2, d: 0.6 },
+  { model: 'desk', label: '机と椅子', w: 1.0, d: 1.05 },
+  { model: 'lowTable', label: '座卓と座布団', w: 1.2, d: 1.85 },
+  { model: 'tansu', label: 'タンス', w: 0.9, d: 0.45 },
+  { model: 'shelf', label: '本棚', w: 0.9, d: 0.4 },
+  { model: 'shoeCabinet', label: '下駄箱', w: 0.9, d: 0.35 },
+  { model: 'vanity', label: '洗面台', w: 0.75, d: 0.5 },
+  { model: 'washer', label: '洗濯機', w: 0.6, d: 0.6 },
+  { model: 'bathtub', label: '浴槽', w: 1.5, d: 0.8 },
+  { model: 'toilet', label: 'トイレ', w: 0.42, d: 0.72 },
+  { model: 'plant', label: '観葉植物', w: 0.45, d: 0.45 },
+  { model: 'custom', label: '寸法を指定（手持ちの家具など）', w: 1.0, d: 0.5, h: 0.8 },
+];
+const LABELS = Object.fromEntries(CATALOG.map((c) => [c.model, c.label]));
+
+/** 家具の回転を考えた床の上の範囲 */
+export function footprint(item) {
+  const turned = Math.abs(Math.sin(item.rot)) > 0.5;
+  const hw = (turned ? item.d : item.w) / 2, hd = (turned ? item.w : item.d) / 2;
+  return { x0: item.cx - hw, x1: item.cx + hw, z0: item.cz - hd, z1: item.cz + hd };
+}
+
+/** 各階の部屋を見つけて種類を決める（info.rooms, info.roomId に入れる） */
+export function detectRooms(house) {
+  for (const info of house.floors) {
+    if (info.empty) continue;
     const { rooms, id } = findRooms(info);
     classifyRooms(info, rooms, id);
+    for (const r of rooms) {
+      // 部屋の中心（重心）
+      let sx = 0, sy = 0;
+      for (const c of r.cells) { sx += c % info.cols; sy += (c / info.cols) | 0; }
+      r.center = [info.X(sx / r.cells.length + 0.5), info.Z(sy / r.cells.length + 0.5)];
+      const hint = info.roomHints.find((h) => id[h.cell[1] * info.cols + h.cell[0]] === r.id);
+      r.label = hint ? hint.name.replace(/\s*[\d.]+\s*帖.*$/, '') : ROOM_NAMES[r.type] || '';
+    }
     info.rooms = rooms;
+    info.roomId = id;
+  }
+}
+
+/** 部屋の種類に合わせて家具の配置を決める。戻り値は家具のリスト */
+export function autoFurnish(house) {
+  const items = [];
+  house.floors.forEach((info, fi) => {
+    if (info.empty) return;
+    if (!info.rooms) detectRooms(house);
+    const id = info.roomId;
     const roomAt = (wx, wz) => {
       const [x, y] = info.toCell(wx, wz);
       if (x < 0 || y < 0 || x >= info.cols || y >= info.rows) return -1;
       return id[y * info.cols + x];
     };
-    const cellAt = (wx, wz) => {
-      const [x, y] = info.toCell(wx, wz);
-      return info.at(x, y);
-    };
-    for (const room of rooms) {
-      const placed = placeRoom(room, RECIPES[room.type] || [], { roomAt, cellAt, info });
-      for (const p of placed) {
-        const obj = MODELS[p.item.model](M, p.item.w, p.item.d);
-        obj.position.set(p.cx, info.level, p.cz);
-        obj.rotation.y = p.rot;
-        furn.add(obj);
-        house.obstacles[fi].push({ x0: p.x0, x1: p.x1, z0: p.z0, z1: p.z1 });
-        count++;
+    const cellAt = (wx, wz) => info.at(...info.toCell(wx, wz));
+    for (const room of info.rooms) {
+      for (const p of placeRoom(room, RECIPES[room.type] || [], { roomAt, cellAt, info })) {
+        items.push({
+          floor: fi, model: p.item.model, label: LABELS[p.item.model] || p.item.model,
+          w: p.item.w, d: p.item.d, cx: p.cx, cz: p.cz, rot: p.rot,
+        });
       }
     }
   });
-  return count;
+  return items;
+}
+
+let materials = null;
+/**
+ * 家具のリストから3Dの家具を作り、各階に追加する。
+ * 歩けない範囲（house.obstacles）も家具に合わせて作り直す。
+ */
+export function buildFurniture(house, items, clip) {
+  // マテリアルは作り直しのたびに増えないよう使い回す
+  const M = materials || (materials = makeMaterials(clip));
+  house.obstacles = house.floors.map(() => []);
+  for (const info of house.floors) {
+    const group = house.group.getObjectByName(`floor-${info.index}`);
+    const old = group?.getObjectByName('furniture');
+    if (old) {
+      group.remove(old);
+      old.traverse((o) => o.geometry?.dispose());
+    }
+  }
+  const groups = new Map();
+  items.forEach((item, index) => {
+    const info = house.floors[item.floor];
+    if (!info || info.empty) return;
+    let furn = groups.get(item.floor);
+    if (!furn) {
+      furn = new THREE.Group();
+      furn.name = 'furniture';
+      house.group.getObjectByName(`floor-${item.floor}`).add(furn);
+      groups.set(item.floor, furn);
+    }
+    const obj = item.model === 'custom' ? customBox(M, item) : MODELS[item.model](M, item.w, item.d);
+    obj.position.set(item.cx, info.level, item.cz);
+    obj.rotation.y = item.rot;
+    obj.userData.furnitureIndex = index;
+    obj.traverse((o) => { o.userData.furnitureIndex = index; });
+    furn.add(obj);
+    house.obstacles[item.floor].push({ ...footprint(item), index });
+  });
+}
+
+function customBox(M, item) {
+  const g = new THREE.Group();
+  box(g, M.cushion, -item.w / 2, item.w / 2, 0, item.h || 0.8, -item.d / 2, item.d / 2);
+  return g;
+}
+
+/** 家具が壁・建物の外・ほかの家具と重なっていないか */
+export function isPlacementOk(house, items, index) {
+  const item = items[index];
+  const info = house.floors[item.floor];
+  if (!info || info.empty) return false;
+  const r = footprint(item);
+  // 床の上（ドア・階段・吹き抜け・壁ではない場所）に収まっているか
+  const onFloor = (x, z) => {
+    const [cx, cy] = info.toCell(x, z);
+    if (cx < 0 || cy < 0 || cx >= info.cols || cy >= info.rows) return false;
+    const i = cy * info.cols + cx;
+    return info.grid[i] === EMPTY && !info.outside[i] && !info.overStairs?.(i);
+  };
+  const nx = Math.max(1, Math.ceil((r.x1 - r.x0) / 0.1)), nz = Math.max(1, Math.ceil((r.z1 - r.z0) / 0.1));
+  for (let i = 0; i <= nx; i++) {
+    for (let j = 0; j <= nz; j++) {
+      const x = r.x0 + 0.03 + (r.x1 - r.x0 - 0.06) * (i / nx);
+      const z = r.z0 + 0.03 + (r.z1 - r.z0 - 0.06) * (j / nz);
+      if (!onFloor(x, z)) return false;
+    }
+  }
+  return !items.some((o, i) => {
+    if (i === index || o.floor !== item.floor) return false;
+    const q = footprint(o);
+    return r.x0 < q.x1 - 0.01 && r.x1 > q.x0 + 0.01 && r.z0 < q.z1 - 0.01 && r.z1 > q.z0 + 0.01;
+  });
+}
+
+/** 新しい家具を置ける場所を (x, z) の近くから探す */
+export function findFreeSpot(house, items, item, x, z) {
+  const test = [...items, item];
+  const index = test.length - 1;
+  const baseRot = item.rot;
+  for (let rad = 0; rad < 15; rad += 0.2) {
+    const steps = Math.max(1, Math.round((rad * Math.PI * 2) / 0.2));
+    for (let k = 0; k < steps; k++) {
+      const a = (k / steps) * Math.PI * 2;
+      for (const rot of [baseRot, baseRot + Math.PI / 2]) {
+        Object.assign(item, { cx: x + Math.cos(a) * rad, cz: z + Math.sin(a) * rad, rot });
+        if (isPlacementOk(house, test, index)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 // 各辺：back は壁側の向き。rot は家具の +z（正面）を部屋の内側へ向ける回転

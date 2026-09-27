@@ -25,7 +25,8 @@ export class Viewer {
     this.camera = new THREE.PerspectiveCamera(50, 1, 0.05, 500);
     this.camera.position.set(14, 10, 18);
 
-    this.scene.add(new THREE.HemisphereLight('#ffffff', '#b8b0a0', 1.6));
+    this.hemi = new THREE.HemisphereLight('#ffffff', '#b8b0a0', 1.6);
+    this.scene.add(this.hemi);
     const sun = new THREE.DirectionalLight('#fff6e8', 2.2);
     sun.position.set(15, 25, 12);
     sun.castShadow = true;
@@ -40,7 +41,10 @@ export class Viewer {
     this.sun = sun;
     this.scene.add(sun, sun.target);
     // 室内が暗くなりすぎないように
-    this.scene.add(new THREE.AmbientLight('#ffffff', 0.35));
+    this.ambient = new THREE.AmbientLight('#ffffff', 0.35);
+    this.scene.add(this.ambient);
+    // 太陽の向き（setSun で変える）。初期値は南東寄りの昼
+    this.sunDir = new THREE.Vector3(0.45, 0.8, 0.4).normalize();
 
     const grass = grassTexture();
     grass.repeat.set(60, 60);
@@ -68,6 +72,10 @@ export class Viewer {
 
     this.walk = { yaw: 0, pitch: 0, keys: new Set(), pad: new Set(), dragging: false, lx: 0, ly: 0 };
     this.setupWalkInput();
+    this.selected = null;
+    this.selectionBox = null;
+    this.drag = null;
+    this.setupFurnitureDrag();
 
     this.clock = new THREE.Clock();
     new ResizeObserver(() => this.resize()).observe(container);
@@ -88,7 +96,10 @@ export class Viewer {
     const first = !this.house;
     if (this.house) {
       this.scene.remove(this.house.group);
-      this.house.group.traverse((o) => o.geometry?.dispose());
+      this.house.group.traverse((o) => {
+        o.geometry?.dispose();
+        if (o.isSprite) { o.material.map.dispose(); o.material.dispose(); }
+      });
     }
     this.house = house;
     this.scene.add(house.group);
@@ -101,9 +112,11 @@ export class Viewer {
     const sc = this.sun.shadow.camera;
     sc.left = sc.bottom = -r;
     sc.right = sc.top = r;
+    sc.far = r * 8;
     sc.updateProjectionMatrix();
-    this.sun.target.position.copy(center);
-    this.sun.position.copy(center).add(new THREE.Vector3(r * 0.7, r * 1.4, r * 0.6));
+    this.placeSun();
+    this.addRoomLabels(house);
+    if (this.selected !== null) this.select(this.selected);
 
     if (this.floor >= house.levels.length) this.floor = 0;
     if (first) this.setMode(this.mode, true);
@@ -170,6 +183,158 @@ export class Viewer {
       child.visible = this.mode === 'exterior' || this.mode === 'walk' || i <= this.floor;
     }
     if (roof) roof.visible = this.mode !== 'interior';
+    // 家具の選択枠は「内観（上から）」のときだけ
+    if (this.selectionBox) this.selectionBox.visible = this.mode === 'interior';
+    // 部屋名と広さは「内観」で選んでいる階だけ
+    group.traverse((o) => {
+      if (o.name === 'room-labels') o.visible = this.mode === 'interior' && o.userData.floorIndex === this.floor;
+    });
+  }
+
+  // ---- 部屋名・広さのラベル ----
+  addRoomLabels(house) {
+    for (const info of house.floors) {
+      if (info.empty || !info.rooms) continue;
+      const labels = new THREE.Group();
+      labels.name = 'room-labels';
+      labels.userData.floorIndex = info.index;
+      for (const r of info.rooms) {
+        if (!r.label || r.area < 1.2) continue;
+        const sprite = makeLabelSprite(r.label, `${(r.area / 1.62).toFixed(1)}帖（${r.area.toFixed(1)}㎡）`);
+        sprite.position.set(r.center[0], info.level + 0.9, r.center[1]);
+        labels.add(sprite);
+      }
+      house.group.getObjectByName(`floor-${info.index}`)?.add(labels);
+    }
+  }
+
+  // ---- 日当たり ----
+  /**
+   * 太陽の位置を設定する
+   * @param {{upBearing:number, declination:number, hour:number, latitude?:number}} o
+   *   upBearing: 間取り図の上が向いている方角（北=0, 東=90, 南=180, 西=270）
+   *   declination: 太陽の赤緯（夏至 23.4 / 春分 0 / 冬至 -23.4）、hour: 時刻（太陽時）
+   */
+  setSun({ upBearing, declination, hour, latitude = 35.7 }) {
+    const rad = Math.PI / 180;
+    const phi = latitude * rad, dec = declination * rad, H = (hour - 12) * 15 * rad;
+    const sinH = Math.sin(phi) * Math.sin(dec) + Math.cos(phi) * Math.cos(dec) * Math.cos(H);
+    const elev = Math.asin(sinH);
+    // 南を 0 として西回りを正とした方位角 → 北から時計回りの方位角
+    const azSouth = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(dec) * Math.cos(phi));
+    const bearing = Math.PI + azSouth;
+    const t = bearing - upBearing * rad; // 間取り図の上から時計回りの角度
+    this.sunDir.set(Math.cos(elev) * Math.sin(t), Math.sin(elev), -Math.cos(elev) * Math.cos(t));
+    this.sunElevation = elev;
+    this.northAngle = -upBearing * rad;
+    this.minimap?.setNorth(this.northAngle);
+
+    // 高さに応じて明るさと色を変える（夜は暗く、朝夕は赤く）
+    const day = Math.max(0, Math.min(1, Math.sin(elev) * 3));
+    this.sun.intensity = elev > 0 ? 0.4 + 2.2 * Math.min(1, Math.sin(elev) * 2) : 0;
+    this.sun.color.set('#ffb070').lerp(new THREE.Color('#fff6e8'), Math.min(1, Math.sin(Math.max(elev, 0)) * 2.5));
+    this.hemi.intensity = 0.35 + 1.25 * day;
+    this.ambient.intensity = 0.15 + 0.2 * day;
+    const sky = new THREE.Color('#1d2640').lerp(new THREE.Color('#e9b98f'), Math.min(1, day * 2)).lerp(new THREE.Color('#bcd8ef'), day);
+    this.scene.background.copy(sky);
+    this.scene.fog.color.copy(sky);
+    this.placeSun();
+  }
+
+  placeSun() {
+    const b = this.house?.bounds;
+    const center = b ? b.getCenter(new THREE.Vector3()) : new THREE.Vector3();
+    const r = b ? Math.max(b.max.x - b.min.x, b.max.z - b.min.z, 6) : 20;
+    this.sun.target.position.copy(center);
+    this.sun.position.copy(center).addScaledVector(this.sunDir, r * 3);
+  }
+
+  // ---- 家具の選択・移動 ----
+  setupFurnitureDrag() {
+    const el = this.renderer.domElement;
+    const ray = new THREE.Raycaster();
+    const ndc = new THREE.Vector2();
+    const aim = (e) => {
+      const r = el.getBoundingClientRect();
+      ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ndc, this.camera);
+    };
+    const shown = (o) => {
+      for (let p = o; p; p = p.parent) if (!p.visible) return false;
+      return true;
+    };
+    // OrbitControls より先に受け取り、家具をつかんだときは回転させない
+    this.container.addEventListener('pointerdown', (e) => {
+      if (this.mode === 'walk' || !this.house || e.target !== el || e.button > 0) return;
+      aim(e);
+      const targets = [];
+      this.house.group.traverse((o) => { if (o.isMesh && o.userData.furnitureIndex !== undefined && shown(o)) targets.push(o); });
+      const hit = ray.intersectObjects(targets, false)[0];
+      if (!hit) return;
+      e.stopPropagation();
+      const index = hit.object.userData.furnitureIndex;
+      this.select(index);
+      this.onSelectFurniture?.(index);
+      const obj = this.furnitureObject(index);
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -obj.position.y);
+      const p = ray.ray.intersectPlane(plane, new THREE.Vector3());
+      if (!p) return;
+      this.drag = { index, obj, plane, dx: obj.position.x - p.x, dz: obj.position.z - p.z, moved: false };
+      el.setPointerCapture(e.pointerId);
+    }, true);
+    el.addEventListener('pointermove', (e) => {
+      if (!this.drag) return;
+      aim(e);
+      const p = ray.ray.intersectPlane(this.drag.plane, new THREE.Vector3());
+      if (!p) return;
+      const snap = (v) => Math.round(v / 0.05) * 0.05; // 5cm 刻み
+      const { obj } = this.drag;
+      obj.position.x = snap(p.x + this.drag.dx);
+      obj.position.z = snap(p.z + this.drag.dz);
+      this.drag.moved = true;
+      const ok = this.onDragFurniture?.(this.drag.index, obj.position.x, obj.position.z) ?? true;
+      this.updateSelectionBox(ok);
+    });
+    const end = () => {
+      if (!this.drag) return;
+      const d = this.drag;
+      this.drag = null;
+      if (d.moved) this.onMoveFurniture?.(d.index, d.obj.position.x, d.obj.position.z);
+    };
+    el.addEventListener('pointerup', end);
+    el.addEventListener('pointercancel', end);
+  }
+
+  furnitureObject(index) {
+    let found = null;
+    this.house?.group.traverse((o) => {
+      if (!found && o.parent?.name === 'furniture' && o.userData.furnitureIndex === index) found = o;
+    });
+    return found;
+  }
+
+  /** 家具を選択（null で解除）。選択中は枠を表示する */
+  select(index, ok = true) {
+    this.selected = index;
+    if (this.selectionBox) {
+      this.scene.remove(this.selectionBox);
+      this.selectionBox.geometry.dispose();
+      this.selectionBox = null;
+    }
+    const obj = index === null ? null : this.furnitureObject(index);
+    if (!obj) return;
+    this.selectionBox = new THREE.BoxHelper(obj);
+    this.selectionBox.material.depthTest = false;
+    this.selectionBox.renderOrder = 10;
+    this.selectionBox.visible = this.mode === 'interior';
+    this.scene.add(this.selectionBox);
+    this.updateSelectionBox(ok);
+  }
+
+  updateSelectionBox(ok = true) {
+    if (!this.selectionBox) return;
+    this.selectionBox.update();
+    this.selectionBox.material.color.set(ok ? '#1fa85a' : '#e03b2f');
   }
 
   // ---- ウォークスルー ----
@@ -369,4 +534,30 @@ export class Viewer {
       new GLTFExporter().parse(this.house.group, resolve, reject, { binary: true });
     });
   }
+}
+
+/** 部屋名と広さを描いたラベル（常に手前に表示） */
+function makeLabelSprite(title, sub) {
+  const c = document.createElement('canvas');
+  c.width = 320;
+  c.height = 112;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(255, 255, 255, 0.88)';
+  g.beginPath();
+  g.roundRect(4, 4, 312, 104, 18);
+  g.fill();
+  g.fillStyle = '#2b2a28';
+  g.textAlign = 'center';
+  g.font = 'bold 42px sans-serif';
+  g.fillText(title, 160, 48, 300);
+  g.font = 'bold 30px sans-serif';
+  g.fillStyle = '#8a4a1f';
+  g.fillText(sub, 160, 92, 300);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  // 画面上で常に同じ大きさに見えるようにする（カメラとの距離で小さくならない）
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+  sprite.scale.set(0.15, 0.0525, 1);
+  sprite.renderOrder = 5;
+  return sprite;
 }
